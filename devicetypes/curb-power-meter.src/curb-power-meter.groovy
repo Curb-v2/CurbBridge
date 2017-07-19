@@ -29,7 +29,7 @@ metadata {
 								[value: -1000,   color: "#25c100"],
 								[value: -500,   color: "#76ce61"],
 					      [value: -100,   color: "#bbedaf"],
-            		[value: 0,   color: "#ebede3"],
+            		[value: 0,   color: "#bcbbb5"],
             		[value: 100, color: "#efc621"],
                 [value: 1000, color: "#ed8c25"],
 								[value: 2000, color: "#db5e1f"]
