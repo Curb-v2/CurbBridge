@@ -13,6 +13,9 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  */
+
+include 'asynchttp_v1'
+
 definition(
     name: "Curb (Connect)",
     namespace: "jhaines0",
@@ -23,104 +26,97 @@ definition(
     iconX2Url: "http://energycurb.com/wp-content/uploads/2015/12/curb-web-logo.png",
     iconX3Url: "http://energycurb.com/wp-content/uploads/2015/12/curb-web-logo.png",
     singleInstance: true
-){
-	appSetting "clientId"
+) {
+    appSetting "clientId"
 }
 
-
 preferences {
-    page(name: "auth", title: "Curb", nextPage:"", content:"authPage", uninstall: true)
+    page(name: "auth", title: "Curb", nextPage: "", content: "authPage", uninstall: true)
 }
 
 mappings {
-    path("/oauth/initialize") {action: [GET: "oauthInitUrl"]}
-    path("/oauth/callback") {action: [GET: "callback"]}
+    path("/oauth/initialize") {
+        action: [GET: "oauthInitUrl"]
+    }
+    path("/oauth/callback") {
+        action: [GET: "callback"]
+    }
 }
 
 def authPage() {
-	log.debug "authPage()"
+    log.debug "authPage()"
+    if (!atomicState.accessToken) {
+        atomicState.accessToken = createAccessToken()
+    }
 
-	if(!atomicState.accessToken) {
-		atomicState.accessToken = createAccessToken()
-	}
-
-	if(atomicState.authToken) {
+    if (atomicState.authToken) {
         log.debug("Already Connected")
-        
+
         return dynamicPage(name: "auth", title: "Connected", nextPage: "", install: true, uninstall: true) {
-        	section() {
-            	paragraph("You are connected to Curb")
+            section() {
+                paragraph("You are connected to Curb")
             }
             section() {
                 paragraph("If you need more frequent measurements, you may adjust the update rate below. [1-15]")
                 input "samplesPerMinute", "number", required: false, title: "Sample Rate (samples per minute)", defaultValue: 1, range: "1..15"
-        	}
-    	}
-	} else {
-		log.debug("Logging In")
-        
-        return dynamicPage(name: "auth", title: "Login", nextPage: "", uninstall:false) {
-			section() {
-				paragraph("Tap below to log in to the Curb service and authorize SmartThings access")
-				href url:buildRedirectUrl, style:"embedded", required:true, title:"Curb", description:"Click to enter Curb Credentials"
-			}
-		}
-        
-	}
+            }
+        }
+    } else {
+        log.debug("Logging In")
+        return dynamicPage(name: "auth", title: "Login", nextPage: "", uninstall: false) {
+            section() {
+                paragraph("Tap below to log in to the Curb service and authorize SmartThings access")
+                href url: buildRedirectUrl, style: "embedded", required: true, title: "Curb", description: "Click to enter Curb Credentials"
+            }
+        }
+    }
 }
 
 def oauthInitUrl() {
-	atomicState.oauthInitState = UUID.randomUUID().toString()
-
-	def oauthParams = [
-			response_type: "code",
-			scope: "offline_access",
-            audience: "app.energycurb.com/api",
-			client_id: curbClientId,
-            connection: "Users",
-			state: atomicState.oauthInitState,
-			redirect_uri: callbackUrl
-	]
-
-	redirect(location: "${curbLoginUrl}?${toQueryString(oauthParams)}")
+    atomicState.oauthInitState = UUID.randomUUID().toString()
+    def oauthParams = [
+        response_type: "code",
+        scope: "offline_access",
+        audience: "app.energycurb.com/api",
+        client_id: curbClientId,
+        connection: "Users",
+        state: atomicState.oauthInitState,
+        redirect_uri: callbackUrl
+    ]
+    redirect(location: "${curbLoginUrl}?${toQueryString(oauthParams)}")
 }
 
 def callback() {
-	log.debug "callback()>> params: $params, params.code ${params.code}"
-
-	def code = params.code
-	def oauthState = params.state
-
-	if (oauthState == atomicState.oauthInitState) {
-		def tokenParams = [
-			grant_type    : "authorization_code",
-			code          : code,
-			client_id     : curbClientId,
-            client_secret : curbClientSecret,
-			redirect_uri  : callbackUrl
-		]
-
-		httpPostJson([uri: curbTokenUrl, body: tokenParams]) { resp ->
-			log.debug "response contentType: ${resp.contentType}"
+    log.debug "callback()>> params: $params, params.code ${params.code}"
+    def code = params.code
+    def oauthState = params.state
+    if (oauthState == atomicState.oauthInitState) {
+        def tokenParams = [
+            grant_type: "authorization_code",
+            code: code,
+            client_id: curbClientId,
+            client_secret: curbClientSecret,
+            redirect_uri: callbackUrl
+        ]
+        httpPostJson([uri: curbTokenUrl, body: tokenParams]) {
+            resp - >
+                log.debug "response contentType: ${resp.contentType}"
             log.debug("Got POST response: ${resp.data}")
-            
+
             atomicState.refreshToken = resp.data.refresh_token
-			atomicState.authToken = resp.data.access_token
-            
+            atomicState.authToken = resp.data.access_token
+
             getCurbLocations()
-		    getUsage()
-		}
-
-		if (atomicState.authToken) {
-			success()
-		} else {
-			fail()
-		}
-
-	} else {
-		log.error "callback() failed oauthState != atomicState.oauthInitState"
-	}
-
+            getUsage()
+        }
+        if (atomicState.authToken) {
+            success()
+        } else {
+            fail()
+        }
+    } else {
+        log.error "callback() failed oauthState != atomicState.oauthInitState"
+    }
 }
 
 def success() {
@@ -145,65 +141,72 @@ def connectionStatus(message, redirectUrl = null) {
 		redirectHtml = """
 			<meta http-equiv="refresh" content="3; url=${redirectUrl}" />
 		"""
-	}
+  }
 
 	def html = """
-        <!DOCTYPE html>
-        <html>
-            <head>
-                <meta name="viewport" content="width=640">
-                <title>Curb & SmartThings connection</title>
-                <style type="text/css">
-                    @font-face {
-                        font-family: 'Swiss 721 W01 Thin';
-                        src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.eot');
-                        src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.eot?#iefix') format('embedded-opentype'),
-                        url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.woff') format('woff'),
-                        url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.ttf') format('truetype'),
-                        url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.svg#swis721_th_btthin') format('svg');
-                        font-weight: normal;
-                        font-style: normal;
-                    }
-                    @font-face {
-                        font-family: 'Swiss 721 W01 Light';
-                        src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.eot');
-                        src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.eot?#iefix') format('embedded-opentype'),
-                        url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.woff') format('woff'),
-                        url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.ttf') format('truetype'),
-                        url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.svg#swis721_lt_btlight') format('svg');
-                        font-weight: normal;
-                        font-style: normal;
-                    }
-                    .container {
-                        width: 90%;
-                        padding: 4%;
-                        text-align: center;
-                    }
-                    img {
-                        vertical-align: middle;
-                    }
-                    p {
-                        font-size: 2.2em;
-                        font-family: 'Swiss 721 W01 Thin';
-                        text-align: center;
-                        color: #666666;
-                        padding: 0 40px;
-                        margin-bottom: 0;
-                    }
-                    span {
-                        font-family: 'Swiss 721 W01 Light';
-                    }
-                </style>
-            </head>
-        <body>
-            <div class="container">
-                <img src="http://energycurb.com/wp-content/uploads/2015/12/curb-web-logo.png" alt="curb icon" />
-                <img src="https://s3.amazonaws.com/smartapp-icons/Partner/support/connected-device-icn%402x.png" alt="connected device icon" />
-                <img src="https://s3.amazonaws.com/smartapp-icons/Partner/support/st-logo%402x.png" alt="SmartThings logo" />
-                ${message}
-            </div>
-        </body>
-    </html>
+  <!DOCTYPE html>
+  <html>
+
+  <head>
+      <meta name="viewport" content="width=640">
+      <title>Curb & SmartThings connection</title>
+      <style type="text/css">
+          @font-face {
+              font-family: 'Swiss 721 W01 Thin';
+              src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.eot');
+              src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.eot?#iefix') format('embedded-opentype'),
+              url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.woff') format('woff'),
+              url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.ttf') format('truetype'),
+              url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-thin-webfont.svg#swis721_th_btthin') format('svg');
+              font-weight: normal;
+              font-style: normal;
+          }
+
+          @font-face {
+              font-family: 'Swiss 721 W01 Light';
+              src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.eot');
+              src: url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.eot?#iefix') format('embedded-opentype'),
+              url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.woff') format('woff'),
+              url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.ttf') format('truetype'),
+              url('https://s3.amazonaws.com/smartapp-icons/Partner/fonts/swiss-721-light-webfont.svg#swis721_lt_btlight') format('svg');
+              font-weight: normal;
+              font-style: normal;
+          }
+
+          .container {
+              width: 90%;
+              padding: 4%;
+              text-align: center;
+          }
+
+          img {
+              vertical-align: middle;
+          }
+
+          p {
+              font-size: 2.2em;
+              font-family: 'Swiss 721 W01 Thin';
+              text-align: center;
+              color: #666666;
+              padding: 0 40px;
+              margin-bottom: 0;
+          }
+
+          span {
+              font-family: 'Swiss 721 W01 Light';
+          }
+      </style>
+  </head>
+
+  <body>
+      <div class="container">
+          <img src="http://energycurb.com/wp-content/uploads/2015/12/curb-web-logo.png" alt="curb icon" />
+          <img src="https://s3.amazonaws.com/smartapp-icons/Partner/support/connected-device-icn%402x.png" alt="connected device icon" />
+          <img src="https://s3.amazonaws.com/smartapp-icons/Partner/support/st-logo%402x.png" alt="SmartThings logo" /> ${message}
+      </div>
+  </body>
+
+  </html>
     """
 
 	render contentType: 'text/html', data: html
@@ -211,52 +214,45 @@ def connectionStatus(message, redirectUrl = null) {
 
 
 def installed() {
-	log.debug "Installed with settings: ${settings}"
-	initialize()
+    log.debug "Installed with settings: ${settings}"
+    initialize()
 }
 
 def updated() {
-	log.debug "Updated with settings: ${settings}"
-	unsubscribe()
-	initialize()
+    log.debug "Updated with settings: ${settings}"
+    unsubscribe()
+    initialize()
 }
 
 def initialize() {
-	log.debug "Initializing"
-    
+    log.debug "Initializing"
     unschedule()
-    
     refreshAuthToken()
     getCurbLocations()
     getUsage()
-    
-    //runEvery1Minute(getUsageFromHistorical)
+
     runEvery5Minutes(getHistorical)
     runEvery3Hours(refreshAuthToken)
-    
+
     def rate = settings.samplesPerMinute
     log.debug("Sampling at ${rate} samples per minute")
-    
+
     schedule("* * * * * ?", doPoll, [data: [cycles: rate]])
 }
 
-def doPoll(data)
-{
+def doPoll(data) {
     getUsage()
-    
-    def period = 60.0/settings.samplesPerMinute
-    //log.debug("Period: ${period}")
-    
+
+    def period = 60.0 / settings.samplesPerMinute
     def count = data.cycles;
     count = count - 1;
-    if(count > 0)
-    {
+    if (count > 0) {
         runIn(period, doPoll, [data: [cycles: count]])
     }
 }
 
 def uninstalled() {
-	log.debug "Uninstalling"
+    log.debug "Uninstalling"
     removeChildDevices(getChildDevices())
 }
 
@@ -266,24 +262,24 @@ private removeChildDevices(delete) {
     }
 }
 
-def getCurbLocations()
-{
+def getCurbLocations() {
     log.debug("Requesting Curb location info");
-    
-    def params = [
-    	uri: "http://app.energycurb.com",
-    	path: "/api/locations",
-        headers: ["Authorization": "Bearer ${atomicState.authToken}"]
-	]
 
-	try {
-    	httpGet(params) { resp ->
-            atomicState.location = resp.data[0].id
+    def params = [
+        uri: "http://app.energycurb.com",
+        path: "/api/locations",
+        headers: ["Authorization": "Bearer ${atomicState.authToken}"]
+    ]
+
+    try {
+        httpGet(params) {
+            resp - >
+                atomicState.location = resp.data[0].id
             log.debug("Location ID: ${atomicState.location}")
-		}
-	} catch (e) {
-    	log.error "something went wrong: $e"
-	}
+        }
+    } catch (e) {
+        log.error "something went wrong: $e"
+    }
 }
 
 def updateChildDevice(dni, label, values)
@@ -305,7 +301,7 @@ def updateChildDevice(dni, label, values)
                 existingDevice = addChildDevice("jhaines0", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
             }
         }
-        
+
         existingDevice.handleMeasurements(values)
     }
     catch (e)
@@ -314,12 +310,11 @@ def updateChildDevice(dni, label, values)
     }
 }
 
-include 'asynchttp_v1'
+
 
 
 /*
 def getUsageFromHistorical() {
-
     log.debug("Getting Usage (from Historical)")
     def params = [
     	uri: "https://app.energycurb.com",
@@ -327,37 +322,28 @@ def getUsageFromHistorical() {
         headers: ["Authorization": "Bearer ${atomicState.authToken}"],
         requestContentType: 'application/json'
 	]
-
 	asynchttp_v1.get(processUsageFromHistorical, params)
 }
-
 def processUsageFromHistorical(resp, data) {
-
     if (resp.hasError())
     {
         log.debug "Usage from Historical Response Error: ${resp.getErrorMessage()}"
         return
     }
-
     def json = resp.json
-
     if(json)
     {
     	//log.debug "Got Usage: ${json}"
         def mainSum = 0.0
-
         json.each
         {
             def latest = it.values.max {vv -> vv.t}
-
             updateChildDevice("${it.id}", it.label, latest.w)
-
             if(it.main)
             {
                 mainSum += latest.w
             }
         }
-
         updateChildDevice("__MAIN__", "Main", mainSum)
     }
 }
@@ -366,7 +352,7 @@ def processUsageFromHistorical(resp, data) {
 def getUsage() {
 
     log.debug("Getting Usage")
-    
+
     def params = [
     	uri: "https://app.energycurb.com",
     	path: "/api/latest/${atomicState.location}",
@@ -402,7 +388,7 @@ def processUsage(resp, data) {
 
 def getHistorical() {
 	log.debug("Getting Historical")
-    
+
     def params = [
     	uri: "https://app.energycurb.com",
     	path: "/api/historical/${atomicState.location}/24h/5m",
@@ -487,7 +473,7 @@ def refreshAuthToken() {
 		httpPostJson([uri: curbTokenUrl, body: tokenParams]) { resp ->
 			log.debug "response contentType: ${resp.contentType}"
             log.debug("Got POST response: ${resp.data}")
-            
+
 			atomicState.authToken = resp.data.access_token
 		}
 	}
@@ -505,5 +491,3 @@ def getShardUrl()            { return getApiServerUrl() }
 def getCallbackUrl()         { return "https://graph.api.smartthings.com/oauth/callback" }
 def getBuildRedirectUrl()    { return "${serverUrl}/oauth/initialize?appId=${app.id}&access_token=${atomicState.accessToken}&apiServerUrl=${shardUrl}" }
 def getApiEndpoint()         { return "https://api.energycurb.com" }
-
-

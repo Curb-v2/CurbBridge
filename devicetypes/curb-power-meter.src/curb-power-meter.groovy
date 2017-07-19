@@ -26,19 +26,23 @@ metadata {
 		multiAttributeTile(name:"power", type: "lighting", width: 2, height: 2, canChangeIcon: true) {
         	tileAttribute ("device.power", key: "PRIMARY_CONTROL") {
  	    		attributeState "power", label:'${currentValue} W', icon: "st.Home.home2", backgroundColors: [
-            		[value: 0,   color: "#00b000"],
-            		[value: 100, color: "#ffcc00"],
-                    [value: 1000, color: "#c00000"]
+								[value: -1000,   color: "#25c100"],
+								[value: -500,   color: "#76ce61"],
+					      [value: -100,   color: "#bbedaf"],
+            		[value: 0,   color: "#ebede3"],
+            		[value: 100, color: "#efc621"],
+                [value: 1000, color: "#ed8c25"],
+								[value: 2000, color: "#db5e1f"]
         		]
 			}
         }
-        
+
 		htmlTile(name:"graph",
 				 action: "generateGraph",
 				 refreshInterval: 10,
 				 width: 6, height: 4,
-				 whitelist: ["www.gstatic.com"])        
-        
+				 whitelist: ["www.gstatic.com"])
+
 		main (["power"])
 		details(["power", "graph"])
 	}
@@ -74,7 +78,7 @@ String getDataString()
 		dataString += ["new Date(${ts})", it.w].toString() + ","
 	}
     //log.debug "dataString: ${dataString}"
-    
+
 	return dataString
 }
 
