@@ -43,15 +43,45 @@ mappings {
     }
 }
 
+def installed() {
+    log.debug "Installed with settings: ${settings}"
+    initialize()
+}
+
+def updated() {
+    log.debug "Updated with settings: ${settings}"
+    unsubscribe()
+    initialize()
+}
+
+def initialize() {
+    log.debug "Initializing"
+    unschedule()
+    refreshAuthToken()
+    updateSelectedLocationId()
+    getUsage()
+	getKwhr()
+    runEvery5Minutes(getHistorical)
+    runEvery3Hours(refreshAuthToken)
+    runEvery3Hours(getKwhr)
+    def rate = settings.samplesPerMinute
+    //log.debug("Sampling at ${rate} samples per minute")
+
+    schedule("* * * * * ?", doPoll, [data: [cycles: rate]])
+}
+
+def uninstalled() {
+    log.debug "Uninstalling"
+    removeChildDevices(getChildDevices())
+}
+
 def authPage() {
-    log.debug "authPage()"
+    //log.debug "authPage()"
     if (!atomicState.accessToken) {
         atomicState.accessToken = createAccessToken()
     }
 
     if (atomicState.authToken) {
-        log.debug("Already Connected")
-
         return dynamicPage(name: "auth", title: "Connected", nextPage: "", install: true, uninstall: true) {
             section() {
                 paragraph("You are connected to Curb")
@@ -60,9 +90,17 @@ def authPage() {
                 paragraph("If you need more frequent measurements, you may adjust the update rate below. [1-15]")
                 input "samplesPerMinute", "number", required: false, title: "Sample Rate (samples per minute)", defaultValue: 1, range: "1..15"
             }
+            section() {
+                paragraph("Select your Curb Location")
+                input(
+                  name: "curbLocation",
+                  type: "enum",
+                  title: "Curb Location",
+                  options: atomicState.locationNames
+                  )
+            }
         }
     } else {
-        log.debug("Logging In")
         return dynamicPage(name: "auth", title: "Login", nextPage: "", uninstall: false) {
             section() {
                 paragraph("Tap below to log in to the Curb service and authorize SmartThings access")
@@ -87,7 +125,7 @@ def oauthInitUrl() {
 }
 
 def callback() {
-    log.debug "callback()>> params: $params, params.code ${params.code}"
+    //log.debug "callback()>> params: $params, params.code ${params.code}"
     def code = params.code
     def oauthState = params.state
     if (oauthState == atomicState.oauthInitState) {
@@ -99,15 +137,14 @@ def callback() {
             redirect_uri: callbackUrl
         ]
         httpPostJson([uri: curbTokenUrl, body: tokenParams]) {
-            resp - >
-                log.debug "response contentType: ${resp.contentType}"
-            log.debug("Got POST response: ${resp.data}")
+            resp ->
+                //log.debug "response contentType: ${resp.contentType}"
+            //log.debug("Got POST response: ${resp.data}")
 
             atomicState.refreshToken = resp.data.refresh_token
             atomicState.authToken = resp.data.access_token
 
             getCurbLocations()
-            getUsage()
         }
         if (atomicState.authToken) {
             success()
@@ -118,6 +155,272 @@ def callback() {
         log.error "callback() failed oauthState != atomicState.oauthInitState"
     }
 }
+
+def doPoll(data) {
+    getUsage()
+	getKwhr()
+    def period = 60.0 / settings.samplesPerMinute
+    def count = data.cycles;
+    count = count - 1;
+    if (count > 0) {
+        runIn(period, doPoll, [data: [cycles: count]])
+    }
+}
+
+private removeChildDevices(delete)
+{
+    delete.each {
+        deleteChildDevice(it.deviceNetworkId)
+    }
+}
+
+def getCurbLocations()
+{
+    //log.debug("Requesting Curb location info");
+
+    def params = [
+        uri: "http://app.energycurb.com",
+        path: "/api/locations",
+        headers: ["Authorization": "Bearer ${atomicState.authToken}"]
+    ]
+
+    try {
+        httpGet(params) {
+            resp ->
+                def locationNameList = []
+                def locationLookup = []
+                log.debug(resp.data)
+                resp.data.each{
+                    locationNameList.push(it.name)
+                    locationLookup.push(it)
+                }
+                atomicState.locationNames = locationNameList
+                atomicState.locationLookup = locationLookup
+
+            //log.debug("Location ID: ${atomicState.location}")
+        }
+    } catch (e) {
+        log.error "something went wrong: $e"
+    }
+}
+
+def updateSelectedLocationId()
+{
+	atomicState.locationLookup.each{
+    	log.debug "location match check: ${it.name} vs selected: ${settings.curbLocation}"
+    	if(it.name == settings.curbLocation){
+        	atomicState.location = it.id
+        	return it.id
+        }
+    }
+}
+
+def updateChildDevice(dni, label, values)
+{
+    try
+    {
+        def existingDevice = getChildDevice(dni)
+
+        if(!existingDevice)
+        {
+        	if(values instanceof Collection)
+            {
+            	// Trying to update a non-existent device with historical data, just skip it
+            	return;
+            }
+            else
+            {
+            	// Otherwise create it
+                existingDevice = addChildDevice("jhaines0", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
+            }
+        }
+
+        existingDevice.handleMeasurements(values)
+    }
+    catch (e)
+    {
+        log.error "Error creating or updating device: ${e}"
+    }
+}
+
+def getUsage()
+{
+
+    log.debug("Getting Usage")
+	log.debug(atomicState.location)
+    def params = [
+    	uri: "https://app.energycurb.com",
+    	path: "/api/latest/${atomicState.location}",
+        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
+        requestContentType: 'application/json'
+	]
+
+	asynchttp_v1.get(processUsage, params)
+}
+
+def processUsage(resp, data)
+{
+
+    if (resp.hasError())
+    {
+        log.error "Usage Response Error: ${resp.getErrorMessage()}"
+        return
+    }
+
+    def json = resp.json
+
+    if(json)
+    {
+    	//log.debug "Got Latest: ${json}"
+
+        json.circuits.each
+        {
+            updateChildDevice("${it.id}", it.label, it.w)
+        }
+
+        updateChildDevice("__MAIN__", "Main", json.net)
+    }
+}
+
+def getHistorical()
+{
+	log.debug("Getting Historical")
+
+    def params = [
+    	uri: "https://app.energycurb.com",
+    	path: "/api/historical/${atomicState.location}/24h/5m",
+        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
+        requestContentType: 'application/json'
+	]
+
+	asynchttp_v1.get(processHistorical, params)
+}
+def getKwhr()
+{
+	log.debug("Getting Kwhr")
+
+    def params = [
+    	uri: "https://app.energycurb.com",
+    	path: "/api/aggregate/${atomicState.location}/30d/h",
+        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
+        requestContentType: 'application/json'
+	]
+
+	asynchttp_v1.get(processKwhr, params)
+}
+
+def processHistorical(resp, data)
+{
+    if (resp.hasError())
+    {
+        log.debug "Historical Response Error: ${resp.getErrorMessage()}"
+        return
+    }
+
+	def json = resp.json
+
+    if(json)
+    {
+        //log.debug "Got Historical Data: ${json}"
+        def total = null
+
+        json.each
+        {
+            updateChildDevice("${it.id}", it.label, it.values)
+
+            if(it.main)
+            {
+                it.values.sort{a,b -> a.t <=> b.t}
+                if(total == null)
+                {
+                    total = it
+                }
+                else
+                {
+                    if(it.values.size() != total.values.size())
+                    {
+                        log.debug("Size mismatch")
+                    }
+                    else
+                    {
+                        for(int i = 0; i < total.values.size(); ++i)
+                        {
+                            if(total.values[i].t != it.values[i].t)
+                            {
+                                log.debug("Time mismatch")
+                            }
+                            else
+                            {
+                                total.values[i].w = (total.values[i].w) + (it.values[i].w)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        updateChildDevice("__MAIN__", "Main", total.values)
+    }
+}
+
+def processKwhr(resp, data)
+{
+    if (resp.hasError())
+    {
+        log.debug "Historical Response Error: ${resp.getErrorMessage()}"
+        return
+    }
+
+	def json = resp.json
+
+    if(json)
+    {
+        def total = null
+        json.each
+        {
+            try
+    		{
+                def existingDevice = getChildDevice(it.id)
+                if(existingDevice)
+                {
+                     existingDevice.handleKwhr(it.kwhr)
+                }
+    		}
+            catch (e)
+            {
+                log.error "Error creating or updating device: ${e}"
+            }
+        }
+    }
+}
+
+def toQueryString(Map m) {
+	return m.collect { k, v -> "${k}=${URLEncoder.encode(v.toString())}" }.sort().join("&")
+}
+
+def refreshAuthToken() {
+	//log.debug "refreshing auth token"
+
+	if(!atomicState.refreshToken) {
+		log.warn "Can not refresh OAuth token since there is no refreshToken stored"
+	} else {
+		def tokenParams = [
+			grant_type: "refresh_token",
+			client_id : curbClientId,
+            client_secret : curbClientSecret,
+			refresh_token: atomicState.refreshToken
+		]
+
+		httpPostJson([uri: curbTokenUrl, body: tokenParams]) { resp ->
+			//log.debug "response contentType: ${resp.contentType}"
+            //log.debug("Got POST response: ${resp.data}")
+
+			atomicState.authToken = resp.data.access_token
+		}
+	}
+}
+
+//THIS DEFINES THE SCREEN AFTER AUTHORIZATION:
 
 def success() {
 	def message = """
@@ -211,274 +514,6 @@ def connectionStatus(message, redirectUrl = null) {
 
 	render contentType: 'text/html', data: html
 }
-
-
-def installed() {
-    log.debug "Installed with settings: ${settings}"
-    initialize()
-}
-
-def updated() {
-    log.debug "Updated with settings: ${settings}"
-    unsubscribe()
-    initialize()
-}
-
-def initialize() {
-    log.debug "Initializing"
-    unschedule()
-    refreshAuthToken()
-    getCurbLocations()
-    getUsage()
-
-    runEvery5Minutes(getHistorical)
-    runEvery3Hours(refreshAuthToken)
-
-    def rate = settings.samplesPerMinute
-    log.debug("Sampling at ${rate} samples per minute")
-
-    schedule("* * * * * ?", doPoll, [data: [cycles: rate]])
-}
-
-def doPoll(data) {
-    getUsage()
-
-    def period = 60.0 / settings.samplesPerMinute
-    def count = data.cycles;
-    count = count - 1;
-    if (count > 0) {
-        runIn(period, doPoll, [data: [cycles: count]])
-    }
-}
-
-def uninstalled() {
-    log.debug "Uninstalling"
-    removeChildDevices(getChildDevices())
-}
-
-private removeChildDevices(delete) {
-    delete.each {
-        deleteChildDevice(it.deviceNetworkId)
-    }
-}
-
-def getCurbLocations() {
-    log.debug("Requesting Curb location info");
-
-    def params = [
-        uri: "http://app.energycurb.com",
-        path: "/api/locations",
-        headers: ["Authorization": "Bearer ${atomicState.authToken}"]
-    ]
-
-    try {
-        httpGet(params) {
-            resp - >
-                atomicState.location = resp.data[0].id
-            log.debug("Location ID: ${atomicState.location}")
-        }
-    } catch (e) {
-        log.error "something went wrong: $e"
-    }
-}
-
-def updateChildDevice(dni, label, values)
-{
-    try
-    {
-        def existingDevice = getChildDevice(dni)
-
-        if(!existingDevice)
-        {
-        	if(values instanceof Collection)
-            {
-            	// Trying to update a non-existent device with historical data, just skip it
-            	return;
-            }
-            else
-            {
-            	// Otherwise create it
-                existingDevice = addChildDevice("jhaines0", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
-            }
-        }
-
-        existingDevice.handleMeasurements(values)
-    }
-    catch (e)
-    {
-        log.error "Error creating or updating device: ${e}"
-    }
-}
-
-
-
-
-/*
-def getUsageFromHistorical() {
-    log.debug("Getting Usage (from Historical)")
-    def params = [
-    	uri: "https://app.energycurb.com",
-    	path: "/api/historical/${atomicState.location}/5m/m",
-        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
-        requestContentType: 'application/json'
-	]
-	asynchttp_v1.get(processUsageFromHistorical, params)
-}
-def processUsageFromHistorical(resp, data) {
-    if (resp.hasError())
-    {
-        log.debug "Usage from Historical Response Error: ${resp.getErrorMessage()}"
-        return
-    }
-    def json = resp.json
-    if(json)
-    {
-    	//log.debug "Got Usage: ${json}"
-        def mainSum = 0.0
-        json.each
-        {
-            def latest = it.values.max {vv -> vv.t}
-            updateChildDevice("${it.id}", it.label, latest.w)
-            if(it.main)
-            {
-                mainSum += latest.w
-            }
-        }
-        updateChildDevice("__MAIN__", "Main", mainSum)
-    }
-}
-*/
-
-def getUsage() {
-
-    log.debug("Getting Usage")
-
-    def params = [
-    	uri: "https://app.energycurb.com",
-    	path: "/api/latest/${atomicState.location}",
-        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
-        requestContentType: 'application/json'
-	]
-
-	asynchttp_v1.get(processUsage, params)
-}
-
-def processUsage(resp, data) {
-
-    if (resp.hasError())
-    {
-        log.error "Usage Response Error: ${resp.getErrorMessage()}"
-        return
-    }
-
-    def json = resp.json
-
-    if(json)
-    {
-    	//log.debug "Got Latest: ${json}"
-
-        json.circuits.each
-        {
-            updateChildDevice("${it.id}", it.label, it.w)
-        }
-
-        updateChildDevice("__MAIN__", "Main", json.net)
-    }
-}
-
-def getHistorical() {
-	log.debug("Getting Historical")
-
-    def params = [
-    	uri: "https://app.energycurb.com",
-    	path: "/api/historical/${atomicState.location}/24h/5m",
-        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
-        requestContentType: 'application/json'
-	]
-
-	asynchttp_v1.get(processHistorical, params)
-}
-
-def processHistorical(resp, data)
-{
-    if (resp.hasError())
-    {
-        log.debug "Historical Response Error: ${resp.getErrorMessage()}"
-        return
-    }
-
-	def json = resp.json
-
-    if(json)
-    {
-        //log.debug "Got Historical Data: ${json}"
-        def total = null
-
-        json.each
-        {
-            updateChildDevice("${it.id}", it.label, it.values)
-
-            if(it.main)
-            {
-                it.values.sort{a,b -> a.t <=> b.t}
-                if(total == null)
-                {
-                    total = it
-                }
-                else
-                {
-                    if(it.values.size() != total.values.size())
-                    {
-                        log.debug("Size mismatch")
-                    }
-                    else
-                    {
-                        for(int i = 0; i < total.values.size(); ++i)
-                        {
-                            if(total.values[i].t != it.values[i].t)
-                            {
-                                log.debug("Time mismatch")
-                            }
-                            else
-                            {
-                                total.values[i].w = (total.values[i].w) + (it.values[i].w)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        updateChildDevice("__MAIN__", "Main", total.values)
-    }
-}
-
-def toQueryString(Map m) {
-	return m.collect { k, v -> "${k}=${URLEncoder.encode(v.toString())}" }.sort().join("&")
-}
-
-def refreshAuthToken() {
-	log.debug "refreshing auth token"
-
-	if(!atomicState.refreshToken) {
-		log.warn "Can not refresh OAuth token since there is no refreshToken stored"
-	} else {
-		def tokenParams = [
-			grant_type: "refresh_token",
-			client_id : curbClientId,
-            client_secret : curbClientSecret,
-			refresh_token: atomicState.refreshToken
-		]
-
-		httpPostJson([uri: curbTokenUrl, body: tokenParams]) { resp ->
-			log.debug "response contentType: ${resp.contentType}"
-            log.debug("Got POST response: ${resp.data}")
-
-			atomicState.authToken = resp.data.access_token
-		}
-	}
-}
-
 
 def getCurbClientId()        { return "R7LHLp5rRr6ktb9hhXfMaILsjwmIinKa" }
 def getCurbClientSecret()    { return "pcxoDsqCN7o_ny5KmEKJ2ci0gL5qqOSfxnzF6JIvwsfRsUVXFdD-DUc40kkhHAZR" }

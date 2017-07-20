@@ -23,18 +23,21 @@ metadata {
 
 	tiles
     {
-		multiAttributeTile(name:"power", type: "lighting", width: 2, height: 2, canChangeIcon: true) {
+		multiAttributeTile(name:"power", type: "lighting", width: 1, height: 1, canChangeIcon: true) {
         	tileAttribute ("device.power", key: "PRIMARY_CONTROL") {
  	    		attributeState "power", label:'${currentValue} W', icon: "st.Home.home2", backgroundColors: [
 								[value: -1000,   color: "#25c100"],
 								[value: -500,   color: "#76ce61"],
-					      [value: -100,   color: "#bbedaf"],
-            		[value: 0,   color: "#bcbbb5"],
-            		[value: 100, color: "#efc621"],
-                [value: 1000, color: "#ed8c25"],
+					      		[value: -100,   color: "#bbedaf"],
+            					[value: 0,   color: "#bcbbb5"],
+            					[value: 100, color: "#efc621"],
+                				[value: 1000, color: "#ed8c25"],
 								[value: 2000, color: "#db5e1f"]
         		]
 			}
+        }
+        valueTile("kwhr", "device.kwhr", decoration: "flat", width: 2, height: 2) {
+            state "kwhr", label:'${currentValue} kWh / 30d'
         }
 
 		htmlTile(name:"graph",
@@ -43,8 +46,8 @@ metadata {
 				 width: 6, height: 4,
 				 whitelist: ["www.gstatic.com"])
 
-		main (["power"])
-		details(["power", "graph"])
+		main (["power", "kwhr"])
+		details(["power", "kwhr", "graph"])
 	}
 }
 
@@ -66,6 +69,10 @@ def handleMeasurements(values)
     }
 
     //log.debug("State now contains ${state.toString().length()}/100000 bytes")
+}
+def handleKwhr(kwhr)
+{
+	sendEvent(name: "kwhr", value: Math.round(kwhr))
 }
 
 String getDataString()
