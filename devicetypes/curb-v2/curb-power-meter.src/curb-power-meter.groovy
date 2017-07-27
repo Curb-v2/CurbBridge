@@ -1,7 +1,7 @@
 /**
  *  Curb Power Meter
  *
- *  Copyright 2016 Justin Haines
+ *  Copyright 2016 Neil Zumwalde
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -14,10 +14,11 @@
  *
  */
 metadata {
-	definition (name: "Curb Power Meter", namespace: "curb-v2", author: "Justin Haines") {
+	definition (name: "Curb Power Meter", namespace: "curb-v2", author: "Neil Zumwalde") {
 		capability "Power Meter"
 		capability "Sensor"
         capability "Energy Meter"
+        capability "Switch"
 	}
 
 	simulator { }
@@ -43,15 +44,19 @@ metadata {
  	    		attributeState "kwhr", label:'${currentValue} kWh / 30 days'
 			}
         }
-
+         standardTile("switch", "device.switch", width: 2, height: 2, canChangeIcon: false) {
+            state "off", label: '${currentValue}', icon:'st.switches.switch.off', backgroundColor: "#ffffff"
+            state "on", label: '${currentValue}', icon:'st.switches.switch.on', backgroundColor: "#00a0dc"
+        }
 		htmlTile(name:"graph",
 				 action: "generateGraph",
 				 refreshInterval: 10,
 				 width: 6, height: 6,
 				 whitelist: ["www.gstatic.com"])
 
+
 		main (["power"])
-		details(["power", "energy", "graph"])
+		details(["power", "switch", "graph"])
 	}
 }
 
@@ -70,6 +75,12 @@ def handleMeasurements(values)
     else
     {
     	sendEvent(name: "power", value: Math.round(values))
+
+        if(Math.round(values) > Math.round(state.threshold)){
+        	sendEvent(name: "switch", value: "on")
+        } else {
+        	sendEvent(name: "switch", value: "off")
+        }
     }
 
     //log.debug("State now contains ${state.toString().length()}/100000 bytes")
@@ -77,6 +88,19 @@ def handleMeasurements(values)
 def handleKwhr(kwhr)
 {
 	sendEvent(name: "energy", value: Math.round(kwhr))
+}
+
+def setAggregate(agg)
+{
+	def threshold = Math.round(agg.avg) + (0.5 * (Math.round(agg.max) - Math.round(agg.avg)))
+    if ( threshold > (Math.round(agg.max) * 0.95))
+    {
+    	threshold = Math.round(agg.max) * 0.90
+    }
+    if (threshold < 50){
+    	threshold = 50
+    }
+    state.threshold = threshold
 }
 
 String getDataString()

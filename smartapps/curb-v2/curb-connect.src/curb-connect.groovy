@@ -19,7 +19,7 @@ include 'asynchttp_v1'
 definition(
     name: "Curb Connect",
     namespace: "curb-v2",
-    author: "Justin Haines",
+    author: "neil@energycurb.com",
     description: "App to get usage data from a Curb home energy monitor",
     category: "",
     iconUrl: "http://energycurb.com/wp-content/uploads/2015/12/curb-web-logo.png",
@@ -55,6 +55,7 @@ def installed() {
 
 def updated() {
     log.debug "Updated with settings: ${settings}"
+    removeChildDevices(getChildDevices())
     unsubscribe()
     initialize()
 }
@@ -64,15 +65,13 @@ def initialize() {
     unschedule()
     refreshAuthToken()
     updateSelectedLocationId()
-    getUsage()
-	getKwhr()
+	getDevices()
 
     runEvery5Minutes(getHistorical)
     runEvery3Hours(refreshAuthToken)
     runEvery3Hours(getKwhr)
     def rate = settings.samplesPerMinute
     //log.debug("Sampling at ${rate} samples per minute")
-
     schedule("* * * * * ?", doPoll, [data: [cycles: rate]])
 }
 
@@ -164,7 +163,6 @@ def callback() {
 
 def doPoll(data) {
     getUsage()
-	getKwhr()
     def period = 60.0 / settings.samplesPerMinute
     def count = data.cycles;
     count = count - 1;
@@ -226,21 +224,6 @@ def updateChildDevice(dni, label, values)
     try
     {
         def existingDevice = getChildDevice(dni)
-
-        if(!existingDevice)
-        {
-        	if(values instanceof Collection)
-            {
-            	// Trying to update a non-existent device with historical data, just skip it
-            	return;
-            }
-            else
-            {
-            	// Otherwise create it
-                existingDevice = createChildDevice(dni, label)
-            }
-        }
-
         existingDevice.handleMeasurements(values)
     }
     catch (e)
@@ -251,8 +234,7 @@ def updateChildDevice(dni, label, values)
 
 def createChildDevice(dni, label)
 {
-	def device =  addChildDevice("curb-v2", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
-    return device
+	return addChildDevice("curb-v2", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
 }
 
 def getUsage()
@@ -266,6 +248,17 @@ def getUsage()
         requestContentType: 'application/json'
 	]
 	asynchttp_v1.get(processUsage, params)
+}
+
+def getDevices()
+{
+    def params = [
+    	uri: "https://app.energycurb.com",
+    	path: "/api/latest/${atomicState.location}",
+        headers: ["Authorization": "Bearer ${atomicState.authToken}"],
+        requestContentType: 'application/json'
+	]
+	asynchttp_v1.get(processDevices, params)
 }
 
 def getHistorical()
@@ -318,6 +311,37 @@ def processUsage(resp, data)
         	updateChildDevice("__CONSUMPTION__", "Usage", json.consumption)
         }
     }
+}
+
+def processDevices(resp, data)
+{
+    if (resp.hasError())
+    {
+        log.error "Error setting up devices: ${resp.getErrorMessage()}"
+        return
+    }
+    def json = resp.json
+    if(json)
+    {
+		def hasProduction = false
+        json.circuits.each
+        {
+        	if(!it.main && !it.production)
+            {
+            	device = createChildDevice("${it.id}", "${it.label}")
+            }
+            if(it.production)
+            {
+            	hasProduction = true
+            }
+        }
+        createChildDevice("__NET__", "Main")
+        if(hasProduction){
+        	createChildDevice("__PRODUCTION__", "Solar")
+            createChildDevice("__CONSUMPTION__", "Usage")
+        }
+    }
+    getKwhr()
 }
 
 def processHistorical(resp, data)
@@ -424,6 +448,7 @@ def processKwhr(resp, data)
                 if(existingDevice)
                 {
                      existingDevice.handleKwhr(it.kwhr)
+                     existingDevice.setAggregate(it)
                 }
     		}
             catch (e)
