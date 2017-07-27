@@ -17,8 +17,8 @@
 include 'asynchttp_v1'
 
 definition(
-    name: "Curb (Connect)",
-    namespace: "jhaines0",
+    name: "Curb Connect",
+    namespace: "curb-v2",
     author: "Justin Haines",
     description: "App to get usage data from a Curb home energy monitor",
     category: "",
@@ -31,7 +31,12 @@ definition(
 }
 
 preferences {
-    page(name: "auth", title: "Curb", nextPage: "", content: "authPage", uninstall: true)
+    page(
+    name: "auth",
+    title: "Curb",
+    nextPage: "",
+    content: "authPage",
+    uninstall: true)
 }
 
 mappings {
@@ -61,6 +66,7 @@ def initialize() {
     updateSelectedLocationId()
     getUsage()
 	getKwhr()
+
     runEvery5Minutes(getHistorical)
     runEvery3Hours(refreshAuthToken)
     runEvery3Hours(getKwhr)
@@ -231,7 +237,7 @@ def updateChildDevice(dni, label, values)
             else
             {
             	// Otherwise create it
-                existingDevice = addChildDevice("jhaines0", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
+                existingDevice = createChildDevice(dni, label)
             }
         }
 
@@ -243,62 +249,37 @@ def updateChildDevice(dni, label, values)
     }
 }
 
+def createChildDevice(dni, label)
+{
+	def device =  addChildDevice("curb-v2", "Curb Power Meter", dni, null, [name: "${dni}", label: "${label}"])
+    return device
+}
+
 def getUsage()
 {
-
-    log.debug("Getting Usage")
-	log.debug(atomicState.location)
+	log.debug atomicState.authToken
+    log.debug atomicState.location
     def params = [
     	uri: "https://app.energycurb.com",
     	path: "/api/latest/${atomicState.location}",
         headers: ["Authorization": "Bearer ${atomicState.authToken}"],
         requestContentType: 'application/json'
 	]
-
 	asynchttp_v1.get(processUsage, params)
-}
-
-def processUsage(resp, data)
-{
-
-    if (resp.hasError())
-    {
-        log.error "Usage Response Error: ${resp.getErrorMessage()}"
-        return
-    }
-
-    def json = resp.json
-
-    if(json)
-    {
-    	//log.debug "Got Latest: ${json}"
-
-        json.circuits.each
-        {
-            updateChildDevice("${it.id}", it.label, it.w)
-        }
-
-        updateChildDevice("__MAIN__", "Main", json.net)
-    }
 }
 
 def getHistorical()
 {
-	log.debug("Getting Historical")
-
     def params = [
     	uri: "https://app.energycurb.com",
     	path: "/api/historical/${atomicState.location}/24h/5m",
         headers: ["Authorization": "Bearer ${atomicState.authToken}"],
         requestContentType: 'application/json'
 	]
-
 	asynchttp_v1.get(processHistorical, params)
 }
 def getKwhr()
 {
-	log.debug("Getting Kwhr")
-
     def params = [
     	uri: "https://app.energycurb.com",
     	path: "/api/aggregate/${atomicState.location}/30d/h",
@@ -307,6 +288,36 @@ def getKwhr()
 	]
 
 	asynchttp_v1.get(processKwhr, params)
+}
+
+def processUsage(resp, data)
+{
+    if (resp.hasError())
+    {
+        log.error "Usage Response Error: ${resp.getErrorMessage()}"
+        return
+    }
+    def json = resp.json
+    if(json)
+    {
+		def hasProduction = false
+        json.circuits.each
+        {
+        	if(!it.main && !it.production)
+            {
+            	updateChildDevice("${it.id}", it.label, it.w)
+            }
+            if(it.production)
+            {
+            	hasProduction = true
+            }
+        }
+        updateChildDevice("__NET__", "Main", json.net)
+        if(hasProduction){
+            updateChildDevice("__PRODUCTION__", "Solar", json.production)
+        	updateChildDevice("__CONSUMPTION__", "Usage", json.consumption)
+        }
+    }
 }
 
 def processHistorical(resp, data)
@@ -323,11 +334,11 @@ def processHistorical(resp, data)
     {
         //log.debug "Got Historical Data: ${json}"
         def total = null
+        def prod = null
 
         json.each
         {
             updateChildDevice("${it.id}", it.label, it.values)
-
             if(it.main)
             {
                 it.values.sort{a,b -> a.t <=> b.t}
@@ -357,9 +368,39 @@ def processHistorical(resp, data)
                     }
                 }
             }
+            if(it.production)
+            {
+                it.values.sort{a,b -> a.t <=> b.t}
+                if(prod == null)
+                {
+                    prod = it
+                }
+                else
+                {
+                    if(it.values.size() != total.values.size())
+                    {
+                        log.debug("Size mismatch")
+                    }
+                    else
+                    {
+                        for(int i = 0; i < total.values.size(); ++i)
+                        {
+                            if(prod.values[i].t != it.values[i].t)
+                            {
+                                log.debug("Time mismatch")
+                            }
+                            else
+                            {
+                                prod.values[i].w = (prod.values[i].w) + (it.values[i].w)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        updateChildDevice("__MAIN__", "Main", total.values)
+        updateChildDevice("__NET__", "Main", total.values)
+        updateChildDevice("__PRODUCTION__", "Solar", prod.values)
     }
 }
 
@@ -375,7 +416,6 @@ def processKwhr(resp, data)
 
     if(json)
     {
-        def total = null
         json.each
         {
             try

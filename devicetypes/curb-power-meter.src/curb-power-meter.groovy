@@ -14,18 +14,22 @@
  *
  */
 metadata {
-	definition (name: "Curb Power Meter", namespace: "jhaines0", author: "Justin Haines") {
+	definition (name: "Curb Power Meter", namespace: "curb-v2", author: "Justin Haines") {
 		capability "Power Meter"
 		capability "Sensor"
+        capability "Energy Meter"
 	}
 
 	simulator { }
 
 	tiles
     {
-		multiAttributeTile(name:"power", type: "lighting", width: 1, height: 1, canChangeIcon: true) {
+		multiAttributeTile(name:"power", type: "lighting", width: 2, height: 2, canChangeIcon: false) {
         	tileAttribute ("device.power", key: "PRIMARY_CONTROL") {
- 	    		attributeState "power", label:'${currentValue} W', icon: "st.Home.home2", backgroundColors: [
+ 	    		attributeState "power",
+                label:'${currentValue} W',
+                icon:'st.switches.switch.off',
+                backgroundColors: [
 								[value: -1000,   color: "#25c100"],
 								[value: -500,   color: "#76ce61"],
 					      		[value: -100,   color: "#bbedaf"],
@@ -35,19 +39,19 @@ metadata {
 								[value: 2000, color: "#db5e1f"]
         		]
 			}
-        }
-        valueTile("kwhr", "device.kwhr", decoration: "flat", width: 2, height: 2) {
-            state "kwhr", label:'${currentValue} kWh / 30d'
+            tileAttribute ("device.energy", key: "SECONDARY_CONTROL") {
+ 	    		attributeState "kwhr", label:'${currentValue} kWh / 30 days'
+			}
         }
 
 		htmlTile(name:"graph",
 				 action: "generateGraph",
 				 refreshInterval: 10,
-				 width: 6, height: 4,
+				 width: 6, height: 6,
 				 whitelist: ["www.gstatic.com"])
 
-		main (["power", "kwhr"])
-		details(["power", "kwhr", "graph"])
+		main (["power"])
+		details(["power", "energy", "graph"])
 	}
 }
 
@@ -72,7 +76,7 @@ def handleMeasurements(values)
 }
 def handleKwhr(kwhr)
 {
-	sendEvent(name: "kwhr", value: Math.round(kwhr))
+	sendEvent(name: "energy", value: Math.round(kwhr))
 }
 
 String getDataString()
