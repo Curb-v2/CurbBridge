@@ -50,7 +50,6 @@ mappings {
 
 def installed() {
     log.debug "Installed with settings: ${settings}"
-    initialize()
 }
 
 def updated() {
@@ -65,7 +64,7 @@ def initialize() {
     unschedule()
     refreshAuthToken()
     updateSelectedLocationId()
-	getDevices()
+	  getDevices()
     runEvery5Minutes(getHistorical)
     runEvery3Hours(refreshAuthToken)
     runEvery3Hours(getKwhr)
@@ -328,6 +327,7 @@ def processDevices(resp, data)
         {
         	if(!it.main && !it.production)
             {
+            log.debug("Creating Device: ${it.label}")
             	device = createChildDevice("${it.id}", "${it.label}")
             }
             if(it.production)
@@ -438,11 +438,17 @@ def processKwhr(resp, data)
     }
 
 	def json = resp.json
-
+	def mainkwh = 0.0
+    def solarkwh = 0.0
+    def usagekwh = 0.0
     if(json)
     {
         json.each
         {
+            if(it.main)
+            {
+            	mainkwh = mainkwh + it.kwhr
+            }
             try
     		{
                 def existingDevice = getChildDevice(it.id)
@@ -456,6 +462,11 @@ def processKwhr(resp, data)
             {
                 log.error "Error creating or updating device: ${e}"
             }
+        }
+        def existingDevice = getChildDevice("__NET__")
+        if (existingDevice)
+        {
+        	  existingDevice.handleKwhr(mainkwh)
         }
     }
 }
