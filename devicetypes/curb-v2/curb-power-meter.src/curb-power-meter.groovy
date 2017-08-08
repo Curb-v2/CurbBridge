@@ -41,7 +41,7 @@ metadata {
         		]
 			}
             tileAttribute ("device.energy", key: "SECONDARY_CONTROL") {
- 	    		attributeState "kwhr", label:'${currentValue} kWh / 30 days'
+ 	    		attributeState "kwhr", label:'${currentValue} kWh'
 			}
         }
          standardTile("switch", "device.switch", width: 2, height: 2, canChangeIcon: false) {

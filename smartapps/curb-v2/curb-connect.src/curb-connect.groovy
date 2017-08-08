@@ -66,7 +66,6 @@ def initialize() {
     refreshAuthToken()
     updateSelectedLocationId()
 	getDevices()
-
     runEvery5Minutes(getHistorical)
     runEvery3Hours(refreshAuthToken)
     runEvery3Hours(getKwhr)
@@ -275,7 +274,7 @@ def getKwhr()
 {
     def params = [
     	uri: "https://app.energycurb.com",
-    	path: "/api/aggregate/${atomicState.location}/30d/h",
+    	path: "/api/aggregate/${atomicState.location}/billing/h",
         headers: ["Authorization": "Bearer ${atomicState.authToken}"],
         requestContentType: 'application/json'
 	]
@@ -315,6 +314,7 @@ def processUsage(resp, data)
 
 def processDevices(resp, data)
 {
+	log.debug "IN PROCESS DEVICES"
     if (resp.hasError())
     {
         log.error "Error setting up devices: ${resp.getErrorMessage()}"
@@ -342,6 +342,7 @@ def processDevices(resp, data)
         }
     }
     getKwhr()
+    getHistorical()
 }
 
 def processHistorical(resp, data)
